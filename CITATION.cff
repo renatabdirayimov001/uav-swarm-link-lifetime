@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "UAV swarm residual link lifetime: simulator, dataset generator and benchmark"
+version: "1.0"
+date-released: "2026-10-18"
+license: MIT
+repository-code: "https://github.com/renatabdirayimov001/uav-swarm-link-lifetime"
+authors:
+  - family-names: "Abdirayimov"
+    given-names: "Renat"
+    affiliation: "Tashkent University of Information Technologies named after Muhammad al-Khwarizmi"
+keywords:
+  - UAV swarm
+  - FANET
+  - link lifetime prediction
+  - graph neural network
+  - air-to-air channel
