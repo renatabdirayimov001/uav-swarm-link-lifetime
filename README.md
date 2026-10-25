@@ -4,13 +4,47 @@ Code, results and trained models for the paper:
 
 > R. Abdirayimov et al., "Learning-Based Residual Link Lifetime Prediction for UAV Swarms under Shadowed Air-to-Air Channels: Simulator, Dataset and Benchmark," submitted to *Drones* (MDPI), 2026.
 
-**Version 1.0 (v3 of the code).** This version fixes two issues found in an internal code audit of the
-first upload: the link state is now *causal* (it depends only on the current and past slots), and every
-label has a full 60-s follow-up (episodes are simulated for 660 s, samples are taken only in the first
-600 s). Both properties are checked by the unit tests in `uav_swarm_sim.self_test()`. All results in
-this repository and in the paper were produced with this version.
+## Version 2.0 (code v4) — used for all results in the revised paper
 
-## Repository files
+Changes with respect to version 1.0 (code v3):
+
+1. **Hello information model.** A Hello message is received in a slot exactly when the link is available.
+   In a slot in which a link is still active but its Hello is missed (the first k-1 unavailable slots), the
+   pair features of the previous slot are held, the LET is aged by one slot and a missed-Hello flag is set
+   (`data_torch.py`). GNN messages are exchanged only over links with a received Hello (`models.py`).
+2. **New ablation:** StaticGNN without neighbour aggregation (`StaticGNN-noagg`).
+3. **Censoring-aware metrics for all predictors** (MAE over all active links, C-index, AUPRC for 2/5/10 s).
+4. **Alternative shadowing model** `shadow_model="motion"` (correlation driven by the displacement of both UAVs).
+5. **Generalisation tests without retraining:** N = 20, N = 50, shadowing std 4 dB.
+6. **Single-slot inference time** of all predictors, including the GBT, on one CPU.
+7. **Statistics:** mean ± std over test episodes for all methods, seed std separately, paired 95% confidence intervals.
+
+The simulator with the default settings (`shadow_model="link"`) generates exactly the same episodes as version 1.0.
+
+| File (v2.0) | Content |
+|---|---|
+| `uav_swarm_sim.py` | Simulator (v4): mobility, A2A channel, causal link state, labels, LET, Hello flag, `shadow_model="motion"`, unit tests |
+| `data_torch.py`, `models.py`, `extra.py`, `baselines.py` | Features with the Hello information model, predictors, metrics |
+| `run_v4.py` | All v2.0 experiments: `main`, `disk`, `motion`, `general`, `timing` (resumable) |
+| `Experiment_v4_Neural.ipynb` | Colab notebook for the neural predictors (T4 GPU, about 3 h) |
+| `results_v4_all_runs.csv` | Per-run, per-test-episode metrics of every predictor and setting |
+| `paired.csv`, `timing_cpu_v4.csv` | Paired differences with 95% CIs; CPU latency of all predictors |
+| `aggregate.py`, `make_tables.py`, `make_figs_v4.py` | Aggregation, LaTeX tables and figures of the revised paper |
+| `checkpoints_v4.zip`, `logs_v4.zip` | Trained models (neural `.pt`, GBT `.pkl`) and training logs |
+| `fig_*.pdf` | Figures of the revised paper |
+
+Reproduction:
+- CPU part (LET, KF-LET, SNR trend, GBT): `NO_NEURAL=1 python run_v4.py main`, then `disk`, `general`, `motion`
+- GPU part (neural predictors): open `Experiment_v4_Neural.ipynb` in Google Colab with a T4 GPU and run all cells
+- Timing: `FORCE_CPU=1 python run_v4.py timing`
+- Tables and figures: `python make_tables.py`, `python make_figs_v4.py`
+
+## Version 1.0 (code v3) — kept for reference
+
+Version 1.0 fixed two issues found in an internal code audit of the first upload: the link state is
+*causal* and every label has a full 60-s follow-up. The v1.0 notebooks, results and checkpoints are kept below.
+
+### Version 1.0 files
 
 | File | Content |
 |---|---|

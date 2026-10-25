@@ -49,6 +49,7 @@ DEFAULT_CFG = dict(
     shadow_std=2.0,        # shadowing std [dB]
     shadow_dcorr=50.0,     # shadowing decorrelation distance [m]
     shadow_model="link",   # "link": independent per link (Gudmundson in distance change)
+                           # "motion": Gudmundson in the absolute displacement of both endpoints
                            # "spatial": static 2-D shadowing field shared by all links
     field_corr=100.0,      # correlation length of the spatial shadowing field [m]
     rician_k_db=7.6,       # Rician K-factor, measured A2A value (Ad Hoc Networks 2025)
@@ -205,8 +206,14 @@ def simulate_channel(P, cfg, rng):
     # time-correlated shadowing (Gudmundson model): rho = exp(-moved / d_corr)
     shadow = np.zeros_like(dist)
     shadow[0] = rng.normal(0, cfg["shadow_std"], dist.shape[1])
+    motion = cfg.get("shadow_model", "link") == "motion"
+    if motion:
+        step = np.linalg.norm(np.diff(P, axis=0), axis=2)          # (steps-1, n) displacement per slot
     for t in range(1, steps):
-        moved = np.abs(dist[t] - dist[t - 1]) + 1e-3
+        if motion:   # both endpoints move through the environment -> shadowing decorrelates
+            moved = step[t - 1, iu] + step[t - 1, ju] + 1e-3
+        else:        # v1-v3 model: decorrelation driven by the change of the link distance
+            moved = np.abs(dist[t] - dist[t - 1]) + 1e-3
         rho = np.exp(-moved / cfg["shadow_dcorr"])
         shadow[t] = rho * shadow[t - 1] + np.sqrt(1 - rho ** 2) * rng.normal(
             0, cfg["shadow_std"], dist.shape[1])
@@ -318,6 +325,7 @@ def generate_episode(cfg=None, **overrides):
     else:
         raise ValueError("channel must be 'a2a' or 'disk'")
     up = debounce(up_raw, cfg["break_steps"])
+    hello = up_raw.copy()                 # Hello received in slot t <=> link available
     life, cens = residual_lifetime(up, cfg)
     # Hello-message observations: GPS position/velocity errors
     P_obs = P + rng.normal(0, cfg["obs_pos_std"], P.shape)
@@ -326,11 +334,11 @@ def generate_episode(cfg=None, **overrides):
     # every kept label has a full horizon of follow-up inside the simulation
     assert up.shape[0] >= n_keep + int(round(cfg["horizon"] / cfg["dt"])) + 1
     cut = lambda x: x[:n_keep]
-    P, V, P_obs, V_obs, dist, snr_ls, snr_meas, up, life, cens, let = map(
-        cut, (P, V, P_obs, V_obs, dist, snr_ls, snr_meas, up, life, cens, let))
+    P, V, P_obs, V_obs, dist, snr_ls, snr_meas, up, hello, life, cens, let = map(
+        cut, (P, V, P_obs, V_obs, dist, snr_ls, snr_meas, up, hello, life, cens, let))
     assert np.isfinite(life).all()
     return dict(cfg=cfg, pos=P, vel=V, pos_obs=P_obs, vel_obs=V_obs, dist=dist,
-                snr_ls=snr_ls, snr_meas=snr_meas, up=up, life=life, censored=cens,
+                snr_ls=snr_ls, snr_meas=snr_meas, up=up, hello=hello, life=life, censored=cens,
                 let=let, iu=iu, ju=ju)
 
 

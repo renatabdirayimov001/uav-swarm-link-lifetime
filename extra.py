@@ -28,11 +28,15 @@ def snr_trend(snr_meas, up, th_db, H, dt, W):
     return pred
 
 
-def gbt_features(nf, ef, iu, ju, W):
+def gbt_features(nf, ef, iu, ju, W, miss=None):
     """Rows (t, m) for t >= W-1: current edge features, endpoint node features
-    (sum, |diff|), and edge features 3 and 7 slots earlier. Returns X (T, M, F)."""
+    (sum, |diff|), and edge features 3 and 7 slots earlier. Returns X (T, M, F).
+    v4: for a missed Hello (miss[t, m]) the endpoint features of slot t-1 are used."""
     a, b = nf[:, iu], nf[:, ju]
     pair = np.concatenate([a + b, np.abs(a - b)], -1)
+    if miss is not None:
+        t, m = np.nonzero(miss)
+        pair[t, m] = pair[t - 1, m]
     lag = lambda L: np.concatenate([np.zeros_like(ef[:L]), ef[:-L]], 0)
     return np.concatenate([ef, pair, lag(3), lag(W - 1)], -1).astype(np.float32)
 

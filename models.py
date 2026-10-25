@@ -16,6 +16,12 @@ Models
 
 Note: MLP and LSTM do not aggregate neighbour features, but their node
 features include the local node degree.
+
+v4 (Hello information model): node has W+1 slots (t-W..t); hel (B, W, M) marks
+active links whose Hello was received. For an active link with a missed Hello
+(up & ~hel), the pair-level inputs of the previous slot are used (held), and
+GNN messages are exchanged only over links with a received Hello.
+StaticGNN with agg=False is the same network without neighbour aggregation.
 """
 import torch
 import torch.nn as nn
@@ -35,6 +41,13 @@ def pair_node_feats(node, iu, ju):
     """Symmetric combination of the two endpoint feature vectors."""
     a, b = node[..., iu, :], node[..., ju, :]
     return torch.cat([a + b, (a - b).abs()], -1)
+
+
+def held_pair_feats(node, up, hel, iu, ju):
+    """node (B, W+1, N, Fn) -> (B, W, M, 2Fn); held pairs use the previous slot."""
+    cur, prev = pair_node_feats(node[:, 1:], iu, ju), pair_node_feats(node[:, :-1], iu, ju)
+    miss = (up & ~hel).unsqueeze(-1)
+    return torch.where(miss, prev, cur)
 
 
 class EdgeGAT(nn.Module):
@@ -74,8 +87,9 @@ class MLPModel(nn.Module):
         super().__init__()
         self.H, self.net = H, mlp(fe + 2 * fn, d, 1, depth=3)
 
-    def forward(self, node, edge, up, iu, ju):
-        x = torch.cat([edge[:, -1], pair_node_feats(node[:, -1], iu, ju)], -1)
+    def forward(self, node, edge, up, hel, iu, ju):
+        pn = held_pair_feats(node[:, -2:], up[:, -1:], hel[:, -1:], iu, ju)[:, -1]
+        x = torch.cat([edge[:, -1], pn], -1)
         return self.H * torch.sigmoid(self.net(x).squeeze(-1))
 
 
@@ -86,9 +100,9 @@ class LSTMModel(nn.Module):
         self.lstm = nn.LSTM(fe + 2 * fn, d, num_layers=2, batch_first=True, dropout=0.1)
         self.head = mlp(d, d, 1)
 
-    def forward(self, node, edge, up, iu, ju):
+    def forward(self, node, edge, up, hel, iu, ju):
         B, W, M, _ = edge.shape
-        x = torch.cat([edge, pair_node_feats(node, iu, ju)], -1)       # (B, W, M, F)
+        x = torch.cat([edge, held_pair_feats(node, up, hel, iu, ju)], -1)   # (B, W, M, F)
         x = x.permute(0, 2, 1, 3).reshape(B * M, W, -1)
         _, (h, _) = self.lstm(x)
         return self.H * torch.sigmoid(self.head(h[-1]).view(B, M))
@@ -97,9 +111,9 @@ class LSTMModel(nn.Module):
 class STGNN(nn.Module):
     """Proposed model. temporal=False gives the StaticGNN ablation."""
 
-    def __init__(self, fn, fe, H, n_nodes, iu, ju, d=64, layers=2, heads=4, dg=32, temporal=True):
+    def __init__(self, fn, fe, H, n_nodes, iu, ju, d=64, layers=2, heads=4, dg=32, temporal=True, agg=True):
         super().__init__()
-        self.H, self.N, self.temporal = H, n_nodes, temporal
+        self.H, self.N, self.temporal, self.agg = H, n_nodes, temporal, agg
         self.register_buffer("iu", iu)
         self.register_buffer("ju", ju)
         self.enc = nn.Linear(fn, d)
@@ -121,26 +135,36 @@ class STGNN(nn.Module):
         A[:, :, self.ju, self.iu] = up
         return E, A
 
-    def forward(self, node, edge, up, iu=None, ju=None):
-        if not self.temporal:                                   # current snapshot only
-            node, edge, up = node[:, -1:], edge[:, -1:], up[:, -1:]
+    def set_nodes(self, n_nodes, iu, ju):
+        """Re-use the trained weights for a swarm of another size."""
+        self.N, self.iu, self.ju = n_nodes, iu, ju
+
+    def forward(self, node, edge, up, hel, iu=None, ju=None):
+        miss_last = (up[:, -1] & ~hel[:, -1]).unsqueeze(-1)            # (B, M, 1)
+        if not self.temporal:                       # current and previous snapshot only
+            node, edge, up, hel = node[:, -2:], edge[:, -2:], up[:, -2:], hel[:, -2:]
+        else:
+            node = node[:, 1:]
         B, W, N, _ = node.shape
-        E, A = self.dense(edge, up)
+        A_src = hel if self.agg else torch.zeros_like(hel)              # messages only with a received Hello
+        E, A = self.dense(edge, A_src)
         h = self.enc(node).reshape(B * W, N, -1)
         E, A = E.reshape(B * W, N, N, -1), A.reshape(B * W, N, N)
         for layer in self.gat:
             h = layer(h, E, A)
         h = h.view(B, W, N, -1)
         if self.temporal:
-            _, z = self.node_gru(h.permute(0, 2, 1, 3).reshape(B * N, W, -1))
-            z = z[-1].view(B, N, -1)
+            zs, _ = self.node_gru(h.permute(0, 2, 1, 3).reshape(B * N, W, -1))   # (B*N, W, d)
+            zs = zs.view(B, N, W, -1)
+            z, zp = zs[:, :, -1], zs[:, :, -2]
             M = edge.shape[2]
             _, g = self.edge_gru(edge.permute(0, 2, 1, 3).reshape(B * M, W, -1))
             g = g[-1].view(B, M, -1)
         else:
-            z = h[:, -1]
+            z, zp = h[:, -1], h[:, -2]
             g = self.edge_mlp(edge[:, -1])
-        zi, zj = z[:, self.iu], z[:, self.ju]
+        zi = torch.where(miss_last, zp[:, self.iu], z[:, self.iu])
+        zj = torch.where(miss_last, zp[:, self.ju], z[:, self.ju])
         x = torch.cat([zi + zj, (zi - zj).abs(), g, edge[:, -1]], -1)
         return self.H * torch.sigmoid(self.head(x).squeeze(-1))
 

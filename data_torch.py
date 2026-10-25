@@ -1,12 +1,45 @@
-"""Feature construction and batching for Experiment 2 (all tensors kept on the GPU)."""
+"""Feature construction and batching (v4).
+
+v4 change (Hello information model): pair features are refreshed only in slots in
+which a Hello message is received (link available). In a slot in which the link is
+still active but the Hello is missed (the first k-1 unavailable slots), the pair
+features of the previous slot are held, the LET is aged by one slot, and a
+'missed Hello' flag is set. With k = 2 a missed slot is always preceded by a slot
+with a received Hello, so 'held' always means 'value of slot t-1'.
+"""
 import numpy as np
-import torch
+try:
+    import torch
+except ImportError:          # numpy-only use (GBT, baselines)
+    torch = None
 from uav_swarm_sim import generate_episode, comm_range
 
-FN, FE = 7, 8   # node / edge feature sizes
+FN, FE = 7, 9   # node / edge feature sizes (v4: + missed-Hello flag)
 
 
-def episode_features(ep):
+def held_mask(ep):
+    """(T, M) bool: link active but Hello missed in this slot."""
+    return ep["up"] & ~ep["hello"]
+
+
+def hold_prev(x, miss):
+    """Replace x[t, m] by x[t-1, m] where miss[t, m] (x: (T, M, ...))."""
+    y = x.copy()
+    t, m = np.nonzero(miss)
+    assert (t > 0).all()
+    y[t, m] = x[t - 1, m]
+    return y
+
+
+def held_let(let, ep):
+    """LET as known to the receiver: in a missed slot, the previous value minus dt."""
+    miss = held_mask(ep)
+    out = hold_prev(let, miss)
+    out[miss] = np.maximum(out[miss] - ep["cfg"]["dt"], 0.0)
+    return out
+
+
+def episode_features(ep, hold=True):
     cfg = ep["cfg"]
     R, H = comm_range(cfg), cfg["horizon"]
     p, v, iu, ju = ep["pos_obs"], ep["vel_obs"], ep["iu"], ep["ju"]
@@ -19,8 +52,14 @@ def episode_features(ep):
     snr = ep["snr_meas"]
     dsnr = np.diff(snr, axis=0, prepend=snr[:1])
     cap = np.log2(1 + 10 ** (np.clip(snr, -20, 60) / 10))
+    miss = held_mask(ep) if hold else np.zeros_like(up)
     ef = np.stack([dist / R, radial / 35, rel / 35, snr / 30, dsnr / 10, cap / 10,
-                   ep["let"] / H, up.astype(float)], -1)
+                   ep["let"] / H, up.astype(float), np.zeros_like(dist)], -1)
+    if hold:
+        ef = hold_prev(ef, miss)
+        ef[..., 6] = held_let(ep["let"], ep) / H
+        ef[..., 7] = up
+        ef[..., 8] = miss
     ef[~up] = 0.0
     inc = np.zeros((len(iu), N))
     inc[np.arange(len(iu)), iu] = 1.0
@@ -28,21 +67,23 @@ def episode_features(ep):
     deg = up.astype(float) @ inc                     # node degree (T, N)
     nf = np.concatenate([p[..., :2] / cfg["area"][0], (p[..., 2:] - cfg["alt"][0]) / 100,
                          v / 35, deg[..., None] / N], -1)
-    return nf.astype(np.float32), ef.astype(np.float32)
+    return nf.astype(np.float32), ef.astype(np.float32), miss
 
 
 class EpisodeBank:
     """Generates episodes (same seeds as Experiment 1) and stores features on device."""
 
-    def __init__(self, mobility, episodes, channel="a2a", device="cuda", seed0=10_000, **cfg_over):
-        nodes, edges, ups, lifes, cens, lets = [], [], [], [], [], []
+    def __init__(self, mobility, episodes, channel="a2a", device="cuda", seed0=10_000, hold=True, **cfg_over):
+        nodes, edges, ups, hels, lifes, cens, lets = [], [], [], [], [], [], []
         self.raw = {}
         for s in episodes:
             ep = generate_episode(mobility=mobility, channel=channel, seed=seed0 + s, **cfg_over)
-            nf, ef = episode_features(ep)
-            nodes.append(nf); edges.append(ef); ups.append(ep["up"])
-            lifes.append(ep["life"]); cens.append(ep["censored"]); lets.append(ep["let"])
-            self.raw[s] = dict(pos_obs=ep["pos_obs"], vel_obs=ep["vel_obs"], cfg=ep["cfg"])
+            nf, ef, miss = episode_features(ep, hold)
+            nodes.append(nf); edges.append(ef); ups.append(ep["up"]); hels.append(ep["up"] & ~miss)
+            lifes.append(ep["life"]); cens.append(ep["censored"])
+            lets.append(held_let(ep["let"], ep) if hold else ep["let"])
+            self.raw[s] = dict(pos_obs=ep["pos_obs"], vel_obs=ep["vel_obs"], cfg=ep["cfg"],
+                               snr_meas=ep["snr_meas"], miss=miss)
         self.cfg = ep["cfg"]
         self.H = float(self.cfg["horizon"])
         self.episodes = list(episodes)
@@ -51,7 +92,8 @@ class EpisodeBank:
         t = lambda x, dt: torch.as_tensor(np.stack(x), dtype=dt, device=device)
         self.node = t(nodes, torch.float32)          # (E, T, N, FN)
         self.edge = t(edges, torch.float16)          # (E, T, M, FE)  half precision to save memory
-        self.up = t(ups, torch.bool)                 # (E, T, M)
+        self.up = t(ups, torch.bool)                 # (E, T, M) link state (active)
+        self.hel = t(hels, torch.bool)               # (E, T, M) active and Hello received
         self.life = t(lifes, torch.float32)
         self.cens = t(cens, torch.bool)
         self.let = np.stack(lets)
@@ -63,10 +105,14 @@ class EpisodeBank:
         return np.stack([e, t], 1)
 
     def batch(self, idx, W):
+        """node: W+1 slots (t-W..t) so that a model can use the previous slot for held pairs;
+        edge / up / hel: W slots (t-W+1..t)."""
         dev = self.node.device
         e = torch.as_tensor(idx[:, 0], device=dev)
         t = torch.as_tensor(idx[:, 1], device=dev)
         ts = t[:, None] - torch.arange(W - 1, -1, -1, device=dev)[None]
+        tn = (t[:, None] - torch.arange(W, -1, -1, device=dev)[None]).clamp(min=0)
         ee = e[:, None].expand_as(ts)
-        return (self.node[ee, ts], self.edge[ee, ts].float(), self.up[ee, ts],
+        en = e[:, None].expand_as(tn)
+        return (self.node[en, tn], self.edge[ee, ts].float(), self.up[ee, ts], self.hel[ee, ts],
                 self.life[e, t], self.cens[e, t], self.up[e, t])
