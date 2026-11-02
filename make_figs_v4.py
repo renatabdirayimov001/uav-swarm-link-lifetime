@@ -10,9 +10,9 @@ plt.rcParams.update({"font.size": 12, "axes.titlesize": 12.5, "axes.labelsize": 
                      "axes.spines.right": False, "axes.grid": True, "grid.alpha": 0.25, "axes.axisbelow": True,
                      "savefig.dpi": 300, "savefig.bbox": "tight", "font.family": "DejaVu Sans"})
 INK, MUTED = "#2b2b29", "#6b6a64"
-CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6", "#7a7a72"]
-OUT = "/home/claude/v4/figs/"; import os; os.makedirs(OUT, exist_ok=True)
-a.DIRS = ["out_v4", "colab_out"]; df = a.load(); ep = a.per_episode(df)
+CAT = ["#7a7a72", "#eb6834", "#1baf7a", "#eda100", "#2a78d6", "#8fbbea", "#6250d6"]
+OUT = "figs/"; import os; os.makedirs(OUT, exist_ok=True)
+a.DIRS = ["out_v4", "colab_out", "colab_v5"]; df = a.load(); ep = a.per_episode(df)
 names = {"rpgm": "RPGM", "gm": "Gauss–Markov", "rwp": "RWP"}
 
 # Fig 3: LET vs true lifetime (episode 18 = seed 10017), LET as known to the receiver
@@ -51,10 +51,11 @@ fig.legend(h, l, loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5,
 fig.savefig(OUT + "fig_channel_effect.pdf"); plt.close(fig)
 
 # Fig 5: relative change vs LET, mean over test episodes, error bars = 95% CI of the paired difference
-meths = ["KF-LET", "GBT", "MLP", "LSTM", "StaticGNN", "ST-GNN"]
+meths = ["KF-LET", "GBT", "MLP", "LSTM", "StaticGNN", "StaticGNN-noagg", "ST-GNN"]
+LAB = {"StaticGNN-noagg": "StaticGNN w/o agg."}
 from scipy import stats
-fig, axs = plt.subplots(1, 2, figsize=(12, 4.8), sharey=True)
-mobs = ["rpgm", "gm", "rwp"]; y = np.arange(3); h = 0.13
+fig, axs = plt.subplots(1, 2, figsize=(12, 5.6), sharey=True)
+mobs = ["rpgm", "gm", "rwp"]; y = np.arange(3); h = 0.115
 for k, (ax, met, title) in enumerate(zip(axs, ["MAE", "AUPRC"], ["MAE reduction vs. LET [%]", "AUPRC gain vs. LET [%]"])):
     for j, m in enumerate(meths):
         vals, errs = [], []
@@ -63,16 +64,16 @@ for k, (ax, met, title) in enumerate(zip(axs, ["MAE", "AUPRC"], ["MAE reduction 
             x = g[g.method == m].set_index("episode")[met]; b = g[g.method == "LET"].set_index("episode")[met]
             r = (b - x) / b * 100 if met == "MAE" else (x - b) / b * 100
             vals.append(r.mean()); errs.append(stats.t.ppf(0.975, len(r) - 1) * r.std() / np.sqrt(len(r)))
-        pos = y + (j - 2.5) * h
-        ax.barh(pos, vals, h * 0.9, xerr=errs, color=CAT[j], label=m, edgecolor="white", linewidth=0.8,
+        pos = y + (j - 3) * h
+        ax.barh(pos, vals, h * 0.9, xerr=errs, color=CAT[j], label=LAB.get(m, m), edgecolor="white", linewidth=0.8,
                 error_kw=dict(lw=0.8, ecolor=INK, capsize=1.5))
         for p, v, e in zip(pos, vals, errs):
             ax.text(v + (e + 0.6 if v >= 0 else -e - 0.6), p, ("0" if abs(v) < 0.5 else f"{v:+.0f}"), va="center",
-                    ha="left" if v >= 0 else "right", fontsize=10, color=INK)
+                    ha="left" if v >= 0 else "right", fontsize=9, color=INK)
     ax.axvline(0, color=INK, lw=1); ax.set_title(title + "  (higher is better)", color=INK); ax.set_xlim(-22, 40)
 axs[0].set_yticks(y, [names[m] for m in mobs]); axs[0].invert_yaxis()
 h_, l_ = axs[0].get_legend_handles_labels()
-fig.tight_layout(rect=(0, 0, 1, 0.9))
-fig.legend(h_, l_, loc="upper center", ncol=6, frameon=False, bbox_to_anchor=(0.5, 1.0))
+fig.tight_layout(rect=(0, 0, 1, 0.87))
+fig.legend(h_, l_, loc="upper center", ncol=4, frameon=False, bbox_to_anchor=(0.5, 1.0))
 fig.savefig(OUT + "fig_relative_gain.pdf"); plt.close(fig)
 print("ok")

@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "UAV swarm residual link lifetime: simulator, dataset generator and benchmark"
-version: "2.0"
-date-released: "2026-10-25"
+version: "2.1"
+date-released: "2026-11-02"
 license: MIT
 repository-code: "https://github.com/renatabdirayimov001/uav-swarm-link-lifetime"
 authors:

@@ -35,8 +35,8 @@ def gbt_features(nf, ef, iu, ju, W, miss=None):
     a, b = nf[:, iu], nf[:, ju]
     pair = np.concatenate([a + b, np.abs(a - b)], -1)
     if miss is not None:
-        t, m = np.nonzero(miss)
-        pair[t, m] = pair[t - 1, m]
+        for t in np.unique(np.nonzero(miss)[0]):
+            pair[t, miss[t]] = pair[t - 1, miss[t]]
     lag = lambda L: np.concatenate([np.zeros_like(ef[:L]), ef[:-L]], 0)
     return np.concatenate([ef, pair, lag(3), lag(W - 1)], -1).astype(np.float32)
 

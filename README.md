@@ -4,7 +4,39 @@ Code, results and trained models for the paper:
 
 > R. Abdirayimov et al., "Learning-Based Residual Link Lifetime Prediction for UAV Swarms under Shadowed Air-to-Air Channels: Simulator, Dataset and Benchmark," submitted to *Drones* (MDPI), 2026.
 
-## Version 2.0 (code v4) — used for all results in the revised paper
+## Version 2.1 (code v5) — used for all results in the second revision
+
+Changes with respect to version 2.0 (all backward compatible: with the default settings the simulator
+generates exactly the same episodes, and the features are identical for the default k = 2):
+
+1. **Spatially correlated shadowing field** `shadow_model="spatial"`: a static 2-D Gaussian field
+   (correlation length 100 m) averaged along each link; dataset regenerated and all predictors retrained
+   (`python run_v4.py spatial` for the CPU part, `Experiment_v5_Spatial.ipynb` for the neural part).
+2. **Extended KF-LET grid** τm ∈ {0.1, …, 10} s × q ∈ {0.05, …, 2} and **calibrated LET** (a + b·LET fitted
+   on the training episodes, row `LET-cal`).
+3. **Sensitivity study** (`python run_v4.py sens`): window W = 4/16, Hello interval 0.25/1 s, break rule
+   k = 1/3, mean speed 6/20 m/s. The Hello information model now supports any k (sequential hold, missed-Hello age).
+4. **Retraining diagnostic** for N = 50 and σ = 4 dB under RPGM (`python run_v4.py retrain`).
+5. **Event-level and route-level metrics** (`analysis_v5.py`): dataset counts (link intervals, break events),
+   interval-weighted MAE, break recall at a matched 5% false-alarm rate, widest-path routing (route breaks per minute).
+6. **Dataset documentation** in `dataset_meta/`: `DATASHEET.md`, SHA-256 fingerprints of all 276 canonical
+   episodes (`episode_sha256.csv`) with `verify_dataset.py`, pinned environment (`requirements-lock.txt`,
+   `Dockerfile`), data license `LICENSE-DATA` (CC BY 4.0).
+
+| File (v2.1) | Content |
+|---|---|
+| `results_v5/results_v5_all_runs.csv` | Per-run, per-test-episode metrics of all settings (main, disk, motion, spatial, general, retrain, sensitivity) |
+| `results_v5/summary_all.csv`, `results_v5/paired_v5.csv` | Means per setting and predictor; paired differences with 95% CIs |
+| `results_v5/event_metrics.csv`, `results_v5/route_metrics.csv`, `results_v5/dataset_counts.csv` | Event-level, route-level and dataset statistics |
+| `results_v5/kf_tuning_v5.zip`, `results_v5/kf_edge_tau_small.csv` | KF-LET validation grids |
+| `checkpoints_logs_v5_spatial.zip` | Neural checkpoints and training logs for the spatial shadowing field |
+| `make_tables_v5.py`, `make_figs_v4.py` | Tables and figures of the second revision |
+
+Reproduction: `NO_NEURAL=1 python run_v4.py main` (then `disk`, `general`, `motion`, `spatial`, `retrain`, `sens`),
+neural predictors with the two Colab notebooks, then `python analysis_v5.py`, `python make_tables_v5.py`,
+`python make_figs_v4.py`. Verify the dataset with `python dataset_meta/verify_dataset.py`.
+
+## Version 2.0 (code v4) — used for the first revision
 
 Changes with respect to version 1.0 (code v3):
 
@@ -73,9 +105,8 @@ Version 1.0 fixed two issues found in an internal code audit of the first upload
 The dataset (11 million labelled samples) is not stored; it is regenerated deterministically from the episode
 seeds `10000 + s` (s = 0…22; episodes 0–13 training, 14–16 validation, 17–22 test).
 
-Note: `uav_swarm_sim.py` also contains an optional spatially correlated shadowing model
-(`shadow_model="spatial"`). It is **not** used for the results in the paper; the default
-(`shadow_model="link"`) reproduces them exactly.
+The default `shadow_model="link"` reproduces the main configuration exactly; `"motion"` and `"spatial"`
+are the alternative shadowing models used in the robustness sections of the paper.
 
 ## Requirements
 
@@ -83,4 +114,4 @@ Python ≥ 3.10, see `requirements.txt` (experiments were run with PyTorch 2.x o
 
 ## License and citation
 
-MIT license (see `LICENSE`). Please cite the paper; citation metadata is in `CITATION.cff`.
+Code: MIT license (see `LICENSE`). Generated data and fingerprints: CC BY 4.0 (`dataset_meta/LICENSE-DATA`). Please cite the paper; citation metadata is in `CITATION.cff`.

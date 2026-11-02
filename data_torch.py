@@ -23,19 +23,31 @@ def held_mask(ep):
 
 
 def hold_prev(x, miss):
-    """Replace x[t, m] by x[t-1, m] where miss[t, m] (x: (T, M, ...))."""
+    """Hold the last value with a received Hello: x[t, m] = x[t-1, m] (after holding) where miss[t, m].
+    Works for any number k-1 of consecutive missed Hellos (sequential in t)."""
     y = x.copy()
-    t, m = np.nonzero(miss)
-    assert (t > 0).all()
-    y[t, m] = x[t - 1, m]
+    ts = np.unique(np.nonzero(miss)[0])
+    assert (ts > 0).all()
+    for t in ts:
+        m = miss[t]
+        y[t, m] = y[t - 1, m]
     return y
 
 
+def miss_age(miss):
+    """Number of consecutive missed Hellos up to and including slot t."""
+    age = np.zeros(miss.shape, np.int32)
+    for t in range(1, miss.shape[0]):
+        age[t] = np.where(miss[t], age[t - 1] + 1, 0)
+    age[0] = miss[0]
+    return age
+
+
 def held_let(let, ep):
-    """LET as known to the receiver: in a missed slot, the previous value minus dt."""
+    """LET as known to the receiver: the last received value minus the time elapsed since then."""
     miss = held_mask(ep)
     out = hold_prev(let, miss)
-    out[miss] = np.maximum(out[miss] - ep["cfg"]["dt"], 0.0)
+    out = np.maximum(out - miss_age(miss) * ep["cfg"]["dt"], 0.0)
     return out
 
 
@@ -59,7 +71,7 @@ def episode_features(ep, hold=True):
         ef = hold_prev(ef, miss)
         ef[..., 6] = held_let(ep["let"], ep) / H
         ef[..., 7] = up
-        ef[..., 8] = miss
+        ef[..., 8] = np.minimum(miss_age(miss), 3) / max(1, cfg["break_steps"] - 1)
     ef[~up] = 0.0
     inc = np.zeros((len(iu), N))
     inc[np.arange(len(iu)), iu] = 1.0

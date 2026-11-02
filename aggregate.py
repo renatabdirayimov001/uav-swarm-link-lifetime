@@ -3,7 +3,7 @@ seed std, paired differences with 95% CI (t, 5 dof) and Wilcoxon p."""
 import glob, os, re, sys, numpy as np, pandas as pd
 from scipy import stats
 
-DIRS = sys.argv[1:] or ["out_v4"]
+DIRS = sys.argv[1:] or ["./out_v4"]
 METRICS = ["MAE", "RMSE", "R2", "AUC", "AUPRC", "MAE_all", "Cindex", "AUPRC_2", "AUPRC_10", "pos_rate", "pos_2", "pos_10"]
 
 
@@ -16,7 +16,8 @@ def load():
         b = os.path.basename(f)
         if "kf_tuning" in b: continue
         df = pd.read_csv(f)
-        m = re.match(r"(main|motion|disk)_(rpgm|gm|rwp)_", b) or re.match(r"general_(N20|N50|std4)_(rpgm|gm|rwp)_", b)
+        m = (re.match(r"(main|motion|disk|spatial|N50r|std4r|sens-[A-Za-z0-9]+)_(rpgm|gm|rwp)_", b)
+             or re.match(r"general_(N20|N50|std4)_(rpgm|gm|rwp)_", b))
         if not m: continue
         df["setting"], df["mobility"] = m.group(1), m.group(2)
         out.append(df)

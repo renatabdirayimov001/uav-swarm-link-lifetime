@@ -29,7 +29,8 @@ EPOCHS, PATIENCE, BATCH, LR = 30, 6, 32, 1e-3
 SEEDS = [0, 1, 2]
 TRAIN, VAL, TEST = list(range(0, 14)), list(range(14, 17)), list(range(17, 23))
 MOBILITY = ["rpgm", "gm", "rwp"]
-KF_GRID = list(itertools.product([2, 3, 5, 10], [0.5, 1.0, 2.0]))
+# v5: grid extended towards small values because the v4 optimum (tau=2 s, q=0.5) lay at the grid corner
+KF_GRID = list(itertools.product([0.1, 0.25, 0.5, 1, 2, 3, 5, 10], [0.05, 0.1, 0.25, 0.5, 1.0, 2.0]))
 if QUICK:
     EPOCHS, SEEDS, TRAIN, VAL, TEST, MOBILITY = 1, [0], [0], [14], [17], ["gm"]
     KF_GRID = [(3, 1.0)]
@@ -115,8 +116,8 @@ def kf_pred(bank, tau, q):
         raw = bank.raw[e]
         kf = bl.kf_let(raw["pos_obs"], raw["vel_obs"], bank.iu.cpu().numpy(), bank.ju.cpu().numpy(),
                        sim.comm_range(raw["cfg"]), raw["cfg"], tau, q)
-        miss = raw["miss"]                     # held value, aged by one slot
-        kf2 = dt.hold_prev(kf, miss); kf2[miss] = np.maximum(kf2[miss] - raw["cfg"]["dt"], 0)
+        miss = raw["miss"]                     # held value, aged by the time since the last Hello
+        kf2 = np.maximum(dt.hold_prev(kf, miss) - dt.miss_age(miss) * raw["cfg"]["dt"], 0)
         out.append(kf2)
     return np.stack(out).astype(np.float32)
 
@@ -168,13 +169,27 @@ def gbt_pred(g, bank):
     return out
 
 
+def let_cal(tr, te):
+    """LET recalibrated on the training episodes: tau_hat = clip(a + b * LET, 0, H), least squares on
+    uncensored active links. Tests whether the negative R^2 of LET is only a calibration effect."""
+    sl = slice(W - 1, None)
+    up, cens = tr.up[:, sl].cpu().numpy(), tr.cens[:, sl].cpu().numpy()
+    m = up & ~cens
+    x, y = tr.let[:, sl][m], tr.life[:, sl].cpu().numpy()[m]
+    b, a = np.polyfit(x, y, 1)
+    return np.clip(a + b * te.let, 0, H).astype(np.float32), dict(cal_a=a, cal_b=b)
+
+
 def done(f):
     return os.path.exists(f)
 
 
-def run_setting(tag, mob, cfg_over, methods, neural):
+def run_setting(tag, mob, cfg_over, methods, neural, window=8, seeds=None):
     """Train / evaluate all predictors for one (setting, mobility)."""
-    print(f"=== {tag} / {mob} ===", flush=True)
+    global W
+    W = window
+    seeds = SEEDS if seeds is None else seeds
+    print(f"=== {tag} / {mob} === (W={W})", flush=True)
     tr = EpisodeBank(mob, TRAIN, device=DEV, **cfg_over)
     va = EpisodeBank(mob, VAL, device=DEV, **cfg_over)
     te = EpisodeBank(mob, TEST, device=DEV, **cfg_over)
@@ -183,8 +198,9 @@ def run_setting(tag, mob, cfg_over, methods, neural):
         tau, q, kt = tune_kf(va); kt.to_csv(f"{OUT}/runs/{tag}_{mob}_kf_tuning.csv", index=False)
         rows = score(te.let.astype(np.float32), te, "LET", tag, 0) + score(kf_pred(te, tau, q), te, "KF-LET", tag, 0,
                      dict(tau=tau, q=q)) + score(snr_trend_pred(te), te, "SNR-trend", tag, 0)
+        pc, cc = let_cal(tr, te); rows += score(pc, te, "LET-cal", tag, 0, cc)
         pd.DataFrame(rows).to_csv(f, index=False); print("  analytical done", flush=True)
-    for seed in SEEDS:
+    for seed in seeds:
         f = f"{OUT}/runs/{tag}_{mob}_GBT_s{seed}.csv"
         if "GBT" in methods and not done(f) and not NEURAL_ONLY:
             g = train_gbt(tr, seed)
@@ -213,6 +229,26 @@ if MODE == "main":
 elif MODE == "motion":
     for mob in MOBILITY:
         run_setting("motion", mob, dict(shadow_model="motion"), ["GBT"], NEURAL_ALT)
+elif MODE == "spatial":
+    # spatially correlated shadowing: static 2-D field (buildings / terrain) shared by all links
+    for mob in MOBILITY:
+        run_setting("spatial", mob, dict(shadow_model="spatial"), ["GBT"], ["LSTM", "StaticGNN", "StaticGNN-noagg"])
+elif MODE == "sens":
+    # sensitivity to the window W, the Hello interval dt, the break rule k and the mean speed (LET, KF-LET, GBT)
+    NEURAL_ONLY = False
+    cases = [("W4", {}, 4), ("W16", {}, 16), ("dt025", dict(dt=0.25), 8), ("dt1", dict(dt=1.0), 8),
+             ("k1", dict(break_steps=1), 8), ("k3", dict(break_steps=3), 8),
+             ("v6", dict(v_mean=6.0), 8), ("v20", dict(v_mean=20.0), 8)]
+    for (tag, over, w), mob in itertools.product(cases, MOBILITY):
+        kt = pd.read_csv(f"{OUT}/runs/main_{mob}_analytical.csv"); kt = kt[kt.method == "KF-LET"].iloc[0]
+        KF_GRID = [(kt.tau, kt.q)]           # KF-LET setting tuned in the main configuration
+        run_setting("sens-" + tag, mob, over, ["GBT"], [], window=w, seeds=[0])
+elif MODE == "retrain":
+    # RPGM, N = 50 and sigma_X = 4 dB: GBT trained on the target configuration (diagnostic of distribution shift)
+    for tag, over in [("N50r", dict(n_uav=50)), ("std4r", dict(shadow_std=4.0))]:
+        kt = pd.read_csv(f"{OUT}/runs/main_rpgm_analytical.csv"); kt = kt[kt.method == "KF-LET"].iloc[0]
+        KF_GRID = [(kt.tau, kt.q)]
+        run_setting(tag, "rpgm", over, ["GBT"], [], seeds=[0])
 elif MODE == "disk":
     # analytical predictors under the disk link model (KF-LET setting tuned on the A2A validation episodes)
     for mob in MOBILITY:
