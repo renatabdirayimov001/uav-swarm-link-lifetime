@@ -4,6 +4,41 @@ Code, results and trained models for the paper:
 
 > R. Abdirayimov et al., "Learning-Based Residual Link Lifetime Prediction for UAV Swarms under Shadowed Air-to-Air Channels: Simulator, Dataset and Benchmark," submitted to *Drones* (MDPI), 2026.
 
+## Version 2.2 (code v6) — used for the analyses added in the third revision
+
+Backward compatible: with the default settings the simulator generates exactly the same episodes as v2.0/v2.1
+(SHA-256 fingerprints unchanged), and the published checkpoints load unchanged; re-evaluated on the six test
+episodes of the paper, they reproduce the published per-episode results exactly.
+
+1. **Realistic Hello reception** `hello_model="fading"` in `uav_swarm_sim.py`: a Hello is decoded only when the
+   instantaneous (Rician-faded) SNR reaches the threshold (optional extra random loss `hello_ploss`); the link
+   state follows the received Hellos, as in a protocol.
+2. **SNR-corrected LET and feature studies** (`extra_v6.py`): LET with the effective range estimated from the SNR
+   of the received Hellos (with and without decay of the shadowing estimate), GBT feature groups for the ablation,
+   and neighbourhood summaries for a per-link GBT.
+3. **Configurable model width and depth** (`models.py`) for an equal-budget hyperparameter search.
+4. **`run_v6.py`**: 30 test episodes (seeds 10017–10046) for all new results. Neural part (GPU): `check`,
+   `reeval` (published checkpoints on 30 episodes), `fading`, `window` (LSTM, W = 4/8/16), `tune` (random search,
+   validation only), `final` (best configuration × 3 seeds), `pack`. CPU part (`NO_NEURAL=1`): `ref`, `letsnr`,
+   `ablation`, then `fading`, `window`, `tune`, `final`. Training instructions in Russian: `TRAINING_v6_RU.md`.
+5. **`analysis_v6_hello_statistics.py`, `analysis_v6_oracle_let_snr.py`**: Hello-loss statistics and the
+   SNR-corrected LET with the exact large-scale SNR.
+
+### Results of v2.2 (`results_v6/`)
+
+| File | Content |
+|---|---|
+| `results_v6_all_runs.csv` | Per-episode metrics of every run (column `run_on`: `cpu` = analytical predictors and GBT, `gpu` = neural predictors) |
+| `results_v6_tuning.csv`, `results_v6_best_configs.csv` | Equal-budget hyperparameter search (validation episodes only) and the selected configurations |
+| `results_v6_kf_tuning.csv` | KF-LET grid search on the validation episodes |
+| `results_v6_hello_statistics.csv`, `results_v6_oracle_let_snr.csv` | Outputs of the two analysis scripts |
+| `make_tables_v6.py` | Recomputes Table 7, Table 9, the fading rows of Table 10, the window study and the search summary |
+| `checkpoints_v6.zip`, `training_logs_v6.zip`, `progress_*.log` | Neural checkpoints and GBT models, per-epoch training logs, run logs |
+
+```
+python results_v6/make_tables_v6.py
+```
+
 ## Version 2.1 (code v5) — used for all results in the second revision
 
 Changes with respect to version 2.0 (all backward compatible: with the default settings the simulator

@@ -22,6 +22,9 @@ active links whose Hello was received. For an active link with a missed Hello
 (up & ~hel), the pair-level inputs of the previous slot are used (held), and
 GNN messages are exchanged only over links with a received Hello.
 StaticGNN with agg=False is the same network without neighbour aggregation.
+
+v6: the width d and the number of layers of every model are arguments (equal-budget
+hyperparameter search, run_v6.py tune); the defaults are the fixed values of v1-v5.
 """
 import torch
 import torch.nn as nn
@@ -83,9 +86,9 @@ class EdgeGAT(nn.Module):
 
 
 class MLPModel(nn.Module):
-    def __init__(self, fn, fe, H, d=128):
+    def __init__(self, fn, fe, H, d=128, layers=3):
         super().__init__()
-        self.H, self.net = H, mlp(fe + 2 * fn, d, 1, depth=3)
+        self.H, self.net = H, mlp(fe + 2 * fn, d, 1, depth=layers)
 
     def forward(self, node, edge, up, hel, iu, ju):
         pn = held_pair_feats(node[:, -2:], up[:, -1:], hel[:, -1:], iu, ju)[:, -1]
@@ -94,10 +97,10 @@ class MLPModel(nn.Module):
 
 
 class LSTMModel(nn.Module):
-    def __init__(self, fn, fe, H, d=64):
+    def __init__(self, fn, fe, H, d=64, layers=2):
         super().__init__()
         self.H = H
-        self.lstm = nn.LSTM(fe + 2 * fn, d, num_layers=2, batch_first=True, dropout=0.1)
+        self.lstm = nn.LSTM(fe + 2 * fn, d, num_layers=layers, batch_first=True, dropout=0.1 if layers > 1 else 0.0)
         self.head = mlp(d, d, 1)
 
     def forward(self, node, edge, up, hel, iu, ju):

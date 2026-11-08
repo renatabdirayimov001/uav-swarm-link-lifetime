@@ -54,6 +54,11 @@ DEFAULT_CFG = dict(
     field_corr=100.0,      # correlation length of the spatial shadowing field [m]
     rician_k_db=7.6,       # Rician K-factor, measured A2A value (Ad Hoc Networks 2025)
     snr_th_db=10.0,        # link is UP if large-scale SNR >= this [dB]
+    hello_model="ideal",   # v6: "ideal": a Hello is received <=> large-scale SNR >= threshold (v1-v5)
+                           #     "fading": a Hello is received <=> instantaneous (Rician-faded) SNR >= threshold,
+                           #               optionally also lost at random with probability hello_ploss;
+                           #               the link state follows the received Hellos (protocol view)
+    hello_ploss=0.0,       # v6: extra random Hello loss (collisions), used only with hello_model="fading"
     break_steps=2,         # link is broken only if down for >= 2 steps (1 s)
     horizon=60.0,          # residual lifetime is capped (censored) here [s]
     channel="a2a",         # "a2a" (SNR threshold, shadowing + Rician) or "disk"
@@ -324,6 +329,21 @@ def generate_episode(cfg=None, **overrides):
         up_raw = snr_ls >= cfg["snr_th_db"]
     else:
         raise ValueError("channel must be 'a2a' or 'disk'")
+    hello_model = cfg.get("hello_model", "ideal")
+    if hello_model == "fading":
+        # v6: realistic Hello reception. A Hello is decoded only when the instantaneous SNR, including
+        # Rician fading, reaches the receiver threshold, so a missed Hello no longer implies that the
+        # large-scale link is unavailable. The link state is then defined, as in a protocol, by k
+        # consecutive missed Hellos. The extra random loss uses an independent random stream, so the
+        # mobility, channel and GNSS errors are identical to those of the ideal model.
+        if cfg["channel"] != "a2a":
+            raise ValueError("hello_model='fading' requires channel='a2a'")
+        up_raw = snr_meas >= cfg["snr_th_db"]
+        if cfg.get("hello_ploss", 0.0) > 0:
+            aux = np.random.default_rng([int(cfg["seed"]), 7])
+            up_raw = up_raw & (aux.random(up_raw.shape) >= cfg["hello_ploss"])
+    elif hello_model != "ideal":
+        raise ValueError("hello_model must be 'ideal' or 'fading'")
     up = debounce(up_raw, cfg["break_steps"])
     hello = up_raw.copy()                 # Hello received in slot t <=> link available
     life, cens = residual_lifetime(up, cfg)
